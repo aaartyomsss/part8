@@ -1,5 +1,6 @@
   
 import React from 'react'
+import SetBorn from './SetBorn'
 
 const Authors = (props) => {
   if (!props.show) {
@@ -30,7 +31,7 @@ const Authors = (props) => {
           )}
         </tbody>
       </table>
-
+      <SetBorn setError={props.setError} authors={authors}/>
     </div>
   )
 }
