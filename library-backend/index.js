@@ -5,6 +5,7 @@ const mongoose = require('mongoose')
 const Author = require('./models/Author')
 const Book = require('./models/Book')
 const User = require('./models/User')
+const jwt = require('jsonwebtoken')
 
 mongoose.set('useCreateIndex', true);
 
@@ -65,6 +66,7 @@ const typeDefs = gql`
       createUser(
         username: String!
         favoriteGenre: String!
+        password: String!
       ): User
       login(
         username: String!
@@ -93,7 +95,8 @@ const resolvers = {
           }
           
       },
-      allAuthors: () => Author.find({})
+      allAuthors: () => Author.find({}),
+      me: (root, args, context) => context.user
   },
   Author: {
       bookCount: (root) => {
@@ -110,8 +113,11 @@ const resolvers = {
     }
   },
   Mutation: {
-      addBook: async (root, args) => {
+      addBook: async (root, args, { user }) => {
         let author = await Author.findOne({ name: args.name })
+        if(!user) {
+          throw new UserInputError("Not logged in!")
+        }
         if(!author) {
           author = new Author({name: args.name, born: args.born})
           const book = new Book({...args, author: author})
@@ -136,7 +142,10 @@ const resolvers = {
         }
         return book
       },
-      editAuthor: async (root, args) => {
+      editAuthor: async (root, args, { user }) => {
+          if (!user) {
+            throw new UserInputError("Not logged in!")
+          }
           const authorToEdit = await Author.findOne({ name: args.name })
           if(!authorToEdit) {
               return null
@@ -145,11 +154,36 @@ const resolvers = {
           try {
             await authorToEdit.save()
           } catch (e) {
-            throw new UserInputError(error.message, {
+            throw new UserInputError(e.message, {
               invalidArgs: args
             })
           }
           return authorToEdit
+      },
+      createUser: async (root, args) => {
+        const newUser = new User({ username: args.username, favoriteGenre: "sci-fi", password: "12345678"})
+        try {
+          await newUser.save()
+        } catch (error) {
+          throw new UserInputError(error.message, {
+            invalidArgs: args
+          })
+        }
+        return newUser
+      },
+      login: async (root, args) => {
+        const user = await User.findOne({ username: args.username})
+
+        if(!user || args.password !== "12345678"){
+          throw new UserInputError("Invalid credentials")
+        }
+
+        const userForToken = {
+          username: user.username,
+          id: user._id
+        }
+
+        return { value: jwt.sign(userForToken, process.env.JWT_SECRET) }
       }
   }
 }
@@ -157,6 +191,16 @@ const resolvers = {
 const server = new ApolloServer({
   typeDefs,
   resolvers,
+  context: async ({ req }) => {
+    const auth = req ? req.headers.authorization : null 
+    if ( auth && auth.toLowerCase().startsWith('bearer ')){
+      const decodedToken = jwt.verify(
+        auth.substring(7), process.env.JWT_SECRET
+      )
+      const user = await User.findById(decodedToken.id)
+      return { user }
+    }
+  }
 })
 
 server.listen().then(({ url }) => {
