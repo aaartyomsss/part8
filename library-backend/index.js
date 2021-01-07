@@ -49,6 +49,7 @@ const typeDefs = gql`
     allBooks(author: String, genre: String): [Book!]!
     allAuthors: [Author!]!
     me: User
+    findUser(token: String!): User
   }
 
   type Mutation {
@@ -81,22 +82,32 @@ const resolvers = {
       authorCount: () => Author.collection.countDocuments(),
       allBooks: async (root, args) => {
           if (!args.author && !args.genre) {
-              return Book.find({})
+              return Book.find({}).populate('author')
           } else if (!args.genre) {
             const searchedAuthor = await Author.findOne({ name: args.author })
-            return Book.find({ author: searchedAuthor._id })
+            return Book.find({ author: searchedAuthor._id }).populate('author')
           } else if (!args.author) {
-              const books = await Book.find({ genres: { $in: args.genre } })
+              const books = await Book.find({ genres: { $in: args.genre } }).populate('author')
               return books
           } else {
               const author = await Author.findOne({ name: args.author })
-              const books = await Book.find({ genres: { $in: args.genre }, author: author._id })
+              const books = await Book.find({ genres: { $in: args.genre }, author: author._id }) .populate('author')
               return books
           }
           
       },
       allAuthors: () => Author.find({}),
-      me: (root, args, context) => context.user
+      findUser: async (root, args) => {
+        const decodedToken = jwt.verify(args.token, process.env.JWT_SECRET)
+        const user = await User.findById(decodedToken.id)
+        if (!user) {
+          throw new UserInputError("User not found")
+        }
+        return user
+      },
+      me: (root, args, context) => {
+        return context.user
+      },
   },
   Author: {
       bookCount: (root) => {
@@ -105,11 +116,20 @@ const resolvers = {
       }
   },
   Book: {
-    author: (root) => {
-      return {
-        name: root.author.name,
-        born: root.author.born
+    author:  (root) => {
+      if(!root.author.born){
+        return {
+          name: root.author.name,
+          born: null
+        }
+      } else {
+        return {
+          name: root.author.name,
+          born: root.author.born
+        }
       }
+        
+      
     }
   },
   Mutation: {
@@ -180,7 +200,8 @@ const resolvers = {
 
         const userForToken = {
           username: user.username,
-          id: user._id
+          id: user._id,
+          favoriteGenre: user.favoriteGenre
         }
 
         return { value: jwt.sign(userForToken, process.env.JWT_SECRET) }
