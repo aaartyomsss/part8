@@ -39,8 +39,9 @@ const typeDefs = gql`
   type Author {
     name: String!
     id: ID!
-    born: Int
-    bookCount: Int
+    born: Int!
+    books: [Book!]
+    bookCount: Int!
   }
 
   type Query {
@@ -74,7 +75,14 @@ const typeDefs = gql`
         password: String!
       ): Token
   }
+
+  type Subscription {
+    bookAdded: Book!
+  }
 `
+
+const { PubSub } = require('apollo-server')
+const pubsub = new PubSub()
 
 const resolvers = {
   Query: {
@@ -96,7 +104,10 @@ const resolvers = {
           }
           
       },
-      allAuthors: () => Author.find({}),
+      allAuthors: () => {
+        console.log('Author.find')
+        return Author.find({}).populate('books')
+      },
       findUser: async (root, args) => {
         const decodedToken = jwt.verify(args.token, process.env.JWT_SECRET)
         const user = await User.findById(decodedToken.id)
@@ -110,10 +121,7 @@ const resolvers = {
       },
   },
   Author: {
-      bookCount: (root) => {
-        const books = Book.find({ author: root._id })
-        return books.countDocuments()
-      }
+      bookCount: (root) => root.books.length
   },
   Book: {
     author:  (root) => {
@@ -142,25 +150,32 @@ const resolvers = {
           author = new Author({name: args.name, born: args.born})
           const book = new Book({...args, author: author})
           try {
-            await book.save()
+            const saved = await book.save()
+            author.books = author.books.concat(saved._id)
+            await author.save()
+            
+          } catch (error) {
+            throw new UserInputError(error.message, {
+              invalidArgs: args
+            })
+          }
+          pubsub.publish('BOOK_ADDED', { bookAdded: book})
+          return book
+          
+        } else {
+          const book = new Book({...args, author: author})
+          try {
+            const saved = await book.save()
+            author.books = author.books.concat(saved._id)
             await author.save()
           } catch (error) {
             throw new UserInputError(error.message, {
               invalidArgs: args
             })
           }
-          
+          pubsub.publish('BOOK_ADDED', { bookAdded: book})
           return book
-        }
-        const book = new Book({...args, author: author})
-        try{
-          await book.save()
-        } catch (error) {
-          throw new UserInputError(error.message, {
-            invalidArgs: args
-          })
-        }
-        return book
+      }
       },
       editAuthor: async (root, args, { user }) => {
           if (!user) {
@@ -206,7 +221,14 @@ const resolvers = {
 
         return { value: jwt.sign(userForToken, process.env.JWT_SECRET) }
       }
+  },
+
+  Subscription: {
+    bookAdded: {
+      subscribe: () => pubsub.asyncIterator(['BOOK_ADDED'])
+    }
   }
+
 }
 
 const server = new ApolloServer({
@@ -224,6 +246,7 @@ const server = new ApolloServer({
   }
 })
 
-server.listen().then(({ url }) => {
+server.listen().then(({ url, subscriptionsUrl }) => {
   console.log(`Server ready at ${url}`)
+  console.log(`Subscriptions ready at ${subscriptionsUrl}`)
 })
